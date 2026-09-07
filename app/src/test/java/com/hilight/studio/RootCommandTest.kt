@@ -41,7 +41,9 @@ class RootCommandTest {
         assertFalse(stop.contains("kill -TERM \$p"))
         assertTrue(stop.contains("[ \"\$arg\" = \"root-instance-1\" ]"))
         assertTrue(stop.contains("\$i -lt 65"))
-        assertTrue(stop.contains("then exit 1"))
+        // Still-running or unidentifiable recorded helpers must block the scanner/next launch.
+        assertTrue(stop.contains("[ \"\$current\" = \"\$original\" ] && exit 1"))
+        assertTrue(stop.contains("[ -n \"\$current\" ] || exit 1"))
         assertFalse(stop.contains("pkill"))
         assertTrue(stop.indexOf("kill -TERM") < stop.indexOf("exec app_process"))
     }
