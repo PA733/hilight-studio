@@ -7,7 +7,7 @@ object RootCommand {
         return "CLASSPATH=${'$'}(pm path com.hilight.studio | head -1 | cut -d: -f2) " +
             "nohup app_process / com.hilight.core.AdbHelper --owner root " +
             "--instance ${quote(rendererInstanceId)} --exclusive --dir ${quote(bridgeDir)} " +
-            "> /data/local/tmp/hilight-root.log 2>&1 & echo ${'$'}!"
+            "< /dev/null > /data/local/tmp/hilight-root.log 2>&1 & echo ${'$'}!"
     }
 
     /**
@@ -39,18 +39,6 @@ object RootCommand {
                 "[ \"${'$'}arg\" = \"$rendererInstanceId\" ]; then exit 0; fi; " +
                 "prev=${'$'}arg; done; exit 1; }"
         }
-        val rejectOtherHelper =
-            "for d in /proc/[0-9]*; do c=${'$'}(tr '\\000' ' ' < ${'$'}d/cmdline " +
-                "2>/dev/null) || c=''; if [ -z \"${'$'}c\" ]; then " +
-                "e=${'$'}(readlink ${'$'}d/exe 2>/dev/null) || e=''; " +
-                "x=${'$'}{e##*/}; if [ \"${'$'}x\" = app_process ] || " +
-                "[ \"${'$'}x\" = app_process32 ] || " +
-                "[ \"${'$'}x\" = app_process64 ]; then exit 1; fi; continue; fi; " +
-                "set -- ${'$'}c; x=${'$'}{1##*/}; " +
-                "if { [ \"${'$'}x\" = app_process ] || " +
-                "[ \"${'$'}x\" = app_process32 ] || [ \"${'$'}x\" = app_process64 ]; } && " +
-                "[ \"${'$'}2\" = / ] && " +
-                "[ \"${'$'}3\" = com.hilight.core.AdbHelper ]; then exit 1; fi; done"
         return "original=''; if [ -d /proc/$pid ]; then " +
             "original=${'$'}($readCmdline) || exit 1; [ -n \"${'$'}original\" ] || exit 1; " +
             "( $identity ) || exit 1; kill -TERM $pid 2>/dev/null || exit 1; fi; " +
@@ -64,12 +52,21 @@ object RootCommand {
             "if [ -d /proc/$pid ]; then current=${'$'}($readCmdline) || exit 1; " +
             "[ -n \"${'$'}current\" ] || exit 1; " +
             "[ \"${'$'}current\" = \"${'$'}original\" ] && exit 1; fi; fi; " +
-            "$rejectOtherHelper; exit 0"
+            duplicateScan()
     }
+
+    /**
+     * One VM scans proc directly instead of spawning tr/readlink for every system process.
+     * exec is essential: scanner failure/timeout must be the command's exit status, not swallowed
+     * by a trailing `exit 0`. The scanner is read-only and also blocks unreadable app_process IDs.
+     */
+    internal fun duplicateScan(): String =
+        "CLASSPATH=${'$'}(pm path com.hilight.studio | head -1 | cut -d: -f2); " +
+            "[ -n \"${'$'}CLASSPATH\" ] || exit 1; export CLASSPATH; " +
+            "exec app_process / com.hilight.core.RendererProcessScanner"
 
     private fun quote(value: String): String = "'${value.replace("'", "'\\''")}'"
 
     private fun validInstanceId(value: String): Boolean =
         value.matches(Regex("[A-Za-z0-9._:-]{1,96}"))
-
 }

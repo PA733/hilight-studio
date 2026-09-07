@@ -3,6 +3,11 @@
     public static void main(java.lang.String[]);
 }
 
+# Read-only duplicate check launched by RootCommand after the exact previous helper exits.
+-keep class com.hilight.core.RendererProcessScanner {
+    public static void main(java.lang.String[]);
+}
+
 # Instantiated by Shizuku using the configured class name and no-argument constructor.
 -keep class com.hilight.studio.HiLightUserService {
     public <init>();

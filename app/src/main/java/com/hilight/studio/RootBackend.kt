@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -94,7 +95,7 @@ class RootBackend(private val ctx: Context) : Backend {
             var ok = false
             try {
                 update(State.REQUESTING)
-                val identity = runSu("id", 60)
+                val identity = runSu("id", 60, "root permission")
                 if (identity.code != 0 || !identity.output.contains("uid=0")) {
                     lastError = "Root permission was not granted"
                     update(State.DENIED)
@@ -104,7 +105,8 @@ class RootBackend(private val ctx: Context) : Backend {
                 update(State.STARTING)
                 releaseAndStopBridgeRenderer(stagedRevision)
                 val instanceId = "root-${UUID.randomUUID()}"
-                val launch = runSu(RootCommand.start(Bridge.DEVICE_DIR, instanceId), 10)
+                val launch = runSu(RootCommand.start(Bridge.DEVICE_DIR, instanceId), 10, "renderer launch")
+                check(launch.code == 0) { "root helper launch failed (exit ${launch.code})" }
                 val pid = launch.output.lineSequence()
                     .map { it.trim() }
                     .lastOrNull { it.toIntOrNull()?.let { n -> n > 0 } == true }
@@ -130,6 +132,7 @@ class RootBackend(private val ctx: Context) : Backend {
                 throw IllegalStateException("root helper did not become ready")
             } catch (t: Throwable) {
                 lastError = t.message ?: t.javaClass.simpleName
+                Log.e(TAG, "root startup failed", t)
                 cleanupOwned()
                 update(State.ERROR)
             } finally {
@@ -273,7 +276,7 @@ class RootBackend(private val ctx: Context) : Backend {
                         PROCESS_EXIT_TIMEOUT_SECONDS,
                     )
                     if (stopped.code != 0) {
-                        throw IllegalStateException("stale heartbeat pid did not match renderer")
+                        throw IllegalStateException("stale renderer exit/duplicate check failed (exit ${stopped.code})")
                     }
                     Bridge.forgetStatusInstance(status.rendererInstanceId)
                     return
@@ -338,25 +341,40 @@ class RootBackend(private val ctx: Context) : Backend {
     private data class Result(val code: Int, val output: String)
 
     private fun runPlain(command: String, timeoutSeconds: Long = 3): Result =
-        runProcess(listOf("sh", "-c", command), timeoutSeconds)
+        runProcess(listOf("sh", "-c", command), timeoutSeconds, "root presence")
 
-    private fun runSu(command: String, timeoutSeconds: Long): Result =
-        runProcess(listOf("su", "-c", command), timeoutSeconds)
+    private fun runSu(command: String, timeoutSeconds: Long, label: String = "renderer stop/scan"): Result =
+        runProcess(listOf("su", "-c", command), timeoutSeconds, label)
 
-    private fun runProcess(args: List<String>, timeoutSeconds: Long): Result {
-        val process = ProcessBuilder(args).redirectErrorStream(true).start()
-        if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
-            process.destroy()
-            if (!process.waitFor(500, TimeUnit.MILLISECONDS)) process.destroyForcibly()
-            throw IllegalStateException("command timed out")
+    private fun runProcess(args: List<String>, timeoutSeconds: Long, label: String): Result {
+        val startedAt = SystemClock.elapsedRealtime()
+        Log.i(TAG, "$label started (timeout=${timeoutSeconds}s)")
+        try {
+            val process = ProcessBuilder(args).redirectErrorStream(true).start()
+            if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+                process.destroy()
+                if (!process.waitFor(500, TimeUnit.MILLISECONDS)) process.destroyForcibly()
+                throw IllegalStateException("$label command timed out after ${timeoutSeconds}s")
+            }
+            val output = process.inputStream.bufferedReader().use { it.readText().take(4_096) }
+            val result = Result(process.exitValue(), output)
+            Log.i(TAG, "$label completed: exit=${result.code} elapsedMs=${SystemClock.elapsedRealtime() - startedAt}")
+            // Only our scanner's summary is logged. Never log the full shell command or foreign argv.
+            output.lineSequence().filter { it.startsWith("HiLight renderer scan:") }
+                .forEach { Log.i(TAG, it.take(512)) }
+            return result
+        } catch (t: Throwable) {
+            Log.e(TAG, "$label failed after ${SystemClock.elapsedRealtime() - startedAt}ms", t)
+            throw t
         }
-        val output = process.inputStream.bufferedReader().use { it.readText().take(4_096) }
-        return Result(process.exitValue(), output)
     }
 
     companion object {
+        private const val TAG = "HiLightRoot"
         private const val RELEASE_TIMEOUT_MS = 12_000L
-        private const val PROCESS_EXIT_TIMEOUT_SECONDS = 9L
+        // Allow the 6.5s exact-exit wait, one VM startup, the scanner's own 5s watchdog, and su overhead.
+        // This bounds shutdown only; no LED duty/brightness/animation safety limit is changed.
+        private const val PROCESS_EXIT_TIMEOUT_SECONDS = 20L
         private const val COLD_STATUS_SAMPLES = 3
         private const val COLD_STATUS_SAMPLE_INTERVAL_MS = 150L
     }
