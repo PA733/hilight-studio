@@ -26,6 +26,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - name: Test process discovery without Android SDK
+        run: |
+          mkdir -p "$RUNNER_TEMP/scanner-test"
+          javac --release 17 -d "$RUNNER_TEMP/scanner-test" core/src/com/hilight/core/RendererProcessScanner.java app/src/test/java/com/hilight/core/RendererProcessScannerSelfTest.java
+          java -cp "$RUNNER_TEMP/scanner-test" com.hilight.core.RendererProcessScannerSelfTest
       - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
       - name: Install Android platform
         run: sdkmanager --channel=3 'platforms;android-37.0' 'build-tools;36.1.0'
@@ -40,6 +45,7 @@ jobs:
           test -n "$release_apk"
           "$ANDROID_HOME/cmdline-tools/latest/bin/apkanalyzer" dex packages "$release_apk" > "$RUNNER_TEMP/dex-packages.txt"
           grep -q 'com.hilight.core.AdbHelper' "$RUNNER_TEMP/dex-packages.txt"
+          grep -q 'com.hilight.core.RendererProcessScanner' "$RUNNER_TEMP/dex-packages.txt"
           grep -q 'com.hilight.studio.HiLightUserService' "$RUNNER_TEMP/dex-packages.txt"
       - name: Upload test and lint reports
         if: always()
